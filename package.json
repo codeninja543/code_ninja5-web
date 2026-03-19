@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
+    "build": "npm --prefix ./frontend install && npm --prefix ./frontend run build",
     "start": "node src/index.js"
   },
   "dependencies": {
