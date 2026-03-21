@@ -120,7 +120,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/auth/me
 router.get('/me', authenticate, async (req, res) => {
   try {
     const { data: user, error } = await supabase
@@ -136,7 +135,6 @@ router.get('/me', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/auth/make-admin
 router.post('/make-admin', authenticate, async (req, res) => {
   try {
     const { adminSecret } = req.body;

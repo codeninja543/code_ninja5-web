@@ -7,10 +7,10 @@ const router = Router();
 
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const FRONTEND_URL         = process.env.FRONTEND_URL || 'http://localhost:5173';
-const BACKEND_URL          = process.env.BACKEND_URL  || 'http://localhost:3001';
 
-const GOOGLE_CALLBACK = process.env.GOOGLE_CALLBACK;
+// La URL de callback debe coincidir EXACTAMENTE con la registrada en Google Console
+const GOOGLE_CALLBACK = process.env.GOOGLE_CALLBACK
+  || 'https://codeninja5.onrender.com/api/auth/google/callback';
 
 function makeJWT(user) {
   return jwt.sign(
@@ -19,7 +19,9 @@ function makeJWT(user) {
     { expiresIn: '7d' }
   );
 }
-console.log("CALLBACK QUE SE ENVÍA:", GOOGLE_CALLBACK);
+
+console.log('✅ GOOGLE_CALLBACK:', GOOGLE_CALLBACK);
+
 async function upsertSocialUser({ email, fullName, avatarUrl, provider }) {
   if (!email) throw new Error(`${provider} no proporcionó un email.`);
 
@@ -36,7 +38,7 @@ async function upsertSocialUser({ email, fullName, avatarUrl, provider }) {
       await supabase.from('users').update({ avatar_url: avatarUrl }).eq('id', user.id);
       user.avatar_url = avatarUrl;
     }
-    console.log(`[${provider}]  Usuario existente: ${user.email}`);
+    console.log(`[${provider}] ✅ Usuario existente: ${user.email}`);
     return user;
   }
 
@@ -71,7 +73,7 @@ async function upsertSocialUser({ email, fullName, avatarUrl, provider }) {
     throw new Error('Error creando usuario: ' + insertErr.message);
   }
 
-  console.log(`[${provider}] Nuevo usuario: ${newUser.email}`);
+  console.log(`[${provider}] ✅ Nuevo usuario: ${newUser.email}`);
   return newUser;
 }
 
@@ -101,7 +103,7 @@ function popupSuccess(token) {
         if (window.opener && !window.opener.closed) {
           window.opener.postMessage({ token: token }, '*');
         }
-      } catch(e) {}
+      } catch(e) { console.error('postMessage error:', e); }
       setTimeout(function() { window.close(); }, 800);
     })();
   </script>
@@ -110,41 +112,62 @@ function popupSuccess(token) {
 }
 
 function popupError(msg) {
+  const safeMsg = String(msg).replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <title>Error</title>
+  <style>
+    body { font-family: sans-serif; display:flex; align-items:center; justify-content:center;
+           height:100vh; margin:0; background:#fef2f2; }
+    .box { text-align:center; padding:2rem; }
+    p { color:#dc2626; margin-top:.5rem; font-size:.9rem; }
+  </style>
 </head>
 <body>
-  <h2 style="color:red;text-align:center;">${msg}</h2>
+  <div class="box">
+    <div class="icon">❌</div>
+    <p>${safeMsg}</p>
+  </div>
   <script>
-    setTimeout(() => window.close(), 2000);
+    (function() {
+      var errorMsg = ${JSON.stringify(msg)};
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage({ error: errorMsg }, '*');
+        }
+      } catch(e) {}
+      setTimeout(function() { window.close(); }, 2500);
+    })();
   </script>
 </body>
 </html>`;
 }
 
+// ── INICIAR LOGIN GOOGLE ───────────────────────────────────────────────────
 router.get('/google', (req, res) => {
   if (!GOOGLE_CLIENT_ID) {
-    return res.send(popupError('Google OAuth no configurado'));
+    return res.send(popupError('Google OAuth no configurado. Agrega GOOGLE_CLIENT_ID al .env'));
   }
-
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_CALLBACK, 
+    redirect_uri: GOOGLE_CALLBACK,
     response_type: 'code',
     scope: 'openid email profile',
     access_type: 'offline',
     prompt: 'select_account',
   });
-
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
 
-// 🔵 CALLBACK GOOGLE
+// ── CALLBACK GOOGLE ────────────────────────────────────────────────────────
 router.get('/google/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, error } = req.query;
+
+  if (error || !code) {
+    return res.send(popupError('Acceso denegado: ' + (error || 'sin código')));
+  }
 
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -154,18 +177,22 @@ router.get('/google/callback', async (req, res) => {
         code,
         client_id: GOOGLE_CLIENT_ID,
         client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_CALLBACK, 
+        redirect_uri: GOOGLE_CALLBACK,
         grant_type: 'authorization_code',
       }),
     });
 
     const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) {
+      throw new Error('No se obtuvo access_token de Google: ' + JSON.stringify(tokenData));
+    }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
 
     const profile = await profileRes.json();
+    console.log('[Google] Profile:', profile.email, profile.name);
 
     const user = await upsertSocialUser({
       email: profile.email,
@@ -176,12 +203,13 @@ router.get('/google/callback', async (req, res) => {
 
     const token = makeJWT(user);
 
-   res.redirect(`${FRONTEND_URL}/auth/success?token=${token}`);
+    // ✅ CORRECTO: usar popupSuccess para comunicarse con el frontend via postMessage
+    res.send(popupSuccess(token));
 
   } catch (err) {
-  console.error("ERROR GOOGLE:", err);
-  res.send(popupError(err.message || 'Error en autenticación'));
-}
+    console.error('ERROR GOOGLE:', err);
+    res.send(popupError(err.message || 'Error en autenticación'));
+  }
 });
 
 export default router;
